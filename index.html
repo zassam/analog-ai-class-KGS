@@ -249,7 +249,7 @@
           <h2 class="text-xl font-bold text-slate-900">개인 전용 관리실 로그인</h2>
         </div>
         <div class="space-y-4">
-          <div><label class="block text-xs font-bold mb-1">아이디</label><input type="text" id="login-id" value="almost_ajae" class="w-full rounded-xl border px-3.5 py-2.5 text-sm focus:border-indigo-500 outline-none"></div>
+          <div><label class="block text-xs font-bold mb-1">아이디</label><input type="text" id="login-id" value="zassam" class="w-full rounded-xl border px-3.5 py-2.5 text-sm focus:border-indigo-500 outline-none"></div>
           <div><label class="block text-xs font-bold mb-1">비밀번호</label><input type="password" id="login-pw" placeholder="비밀번호 입력" class="w-full rounded-xl border px-3.5 py-2.5 text-sm focus:border-indigo-500 outline-none" onkeydown="if(event.key==='Enter') handleTeacherLogin()"></div>
           <button onclick="handleTeacherLogin()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm transition">로그인</button>
           
@@ -412,7 +412,7 @@
   </div>
 
   <div id="modal-qr" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm" style="display: none;">
-    <div class="bg-white rounded-[2rem] p-8 max-w-md w-full shadow-2xl flex flex-col items-center text-center space-y-5">
+    <div class="bg-white p-8 max-w-md w-full shadow-2xl flex flex-col items-center text-center space-y-5 rounded-[2rem]">
       <div><h3 class="text-2xl font-black text-slate-900 mb-1">학생 접속용 QR코드</h3></div>
       <div class="bg-white p-5 rounded-2xl border-4 border-indigo-100 shadow-sm"><div id="qrcode-container" class="mx-auto flex justify-center"></div></div>
       <p id="qr-url-text" class="text-xs text-indigo-600 font-bold bg-indigo-50 px-4 py-2 rounded-lg break-all"></p>
@@ -439,8 +439,6 @@
 
     function safeGetLocal(k) { try { return localStorage.getItem(k); } catch(e) { return null; } }
     function safeSetLocal(k, v) { try { localStorage.setItem(k, v); } catch(e) { console.warn("저장 차단됨"); } }
-    function safeGetSession(k) { try { return sessionStorage.getItem(k); } catch(e) { return null; } }
-    function safeSetSession(k, v) { try { sessionStorage.setItem(k, v); } catch(e) { console.warn("세션 차단됨"); } }
     
     function setDisplay(id, displayType) { 
       const el = document.getElementById(id); 
@@ -451,16 +449,25 @@
       } 
     }
 
-    const STORAGE_KEYS = { TEACHERS: 'hw_ai_teachers_personal', API_KEY: 'hw_ai_gemini_key_personal', CURRENT_TEACHER: 'hw_ai_logged_teacher_personal' };
+    // 버전 v39 - 탭 저장소 키 추가
+    const STORAGE_KEYS = { 
+      TEACHERS: 'hw_ai_teachers_personal', 
+      API_KEY: 'hw_ai_gemini_key_personal', 
+      CURRENT_TEACHER: 'hw_ai_logged_teacher_personal',
+      CURRENT_TAB: 'hw_ai_current_tab_personal' // 새로 추가된 탭 기억용 변수
+    };
 
     let teachers=[], submissions=[], teacherProblems={}, currentTeacher=null;
     let studentInputMode='pad', currentUploadedDataUrl='', tempTeacherAttachments=[];
     let qrCodeInstance=null, padCanvas, padCtx, isDrawing=false, penColor='#0f172a', penWidth=3, isEraser=false;
     let canvasHistory=[], hasUserDrawnOnPad=false, padProblemHeaderText='';
     let editingSubId = null; 
-    let globalApiKey = ''; // Firebase 연동을 위한 전역 API 키 변수
+    let globalApiKey = '';
 
     window.switchMainRole = function(role) {
+      // 1. 현재 선택한 탭을 내 컴퓨터에 저장합니다.
+      safeSetLocal(STORAGE_KEYS.CURRENT_TAB, role);
+
       ['student', 'status', 'teacher'].forEach(v => {
         setDisplay(`view-${v}`, v === role ? 'block' : 'none');
         const btn = document.getElementById(`tab-${v}`);
@@ -522,14 +529,16 @@
       populateSelectOptions(); 
       initDrawingPad();
       setupDragAndDropAndPaste(); 
-      checkExistingTeacherSession();
       initFirebaseListeners();
-      window.switchMainRole('student');
+      
+      // 2. 페이지 시작 시, 저장된 마지막 탭 위치를 불러와서 보여줍니다. (기본값은 student)
+      const lastTab = safeGetLocal(STORAGE_KEYS.CURRENT_TAB) || 'student';
+      window.switchMainRole(lastTab);
     });
 
     function initLocalData() {
       try { const savedT = safeGetLocal(STORAGE_KEYS.TEACHERS); teachers = savedT ? JSON.parse(savedT) : null; } catch(e) { teachers = null; }
-      if (!Array.isArray(teachers) || teachers.length === 0) teachers = [{ id: 'almost_ajae', name: '김경석 선생님', password: '0000' }];
+      if (!Array.isArray(teachers) || teachers.length === 0) teachers = [{ id: 'zassam', name: '김경석 선생님', password: '222510' }];
       try { const apiEl = document.getElementById('api-key-input'); if(apiEl) apiEl.value = safeGetLocal(STORAGE_KEYS.API_KEY) || ''; } catch(e) {}
     }
 
@@ -561,13 +570,29 @@
       const dbRefTeachers = ref(db, 'teachers');
       onValue(dbRefTeachers, (snapshot) => {
         const data = snapshot.val();
-        if (data) {
-          teachers = Object.values(data);
-        } else {
-          teachers = [];
+        let loadedTeachers = data ? Object.values(data) : [];
+        
+        // 데이터베이스에 기본 계정이 없을 경우, 화면에만 임시로 띄워줍니다.
+        if (!loadedTeachers.find(t => t.id === 'zassam')) {
+          loadedTeachers.unshift({ id: 'zassam', name: '김경석 선생님', password: '222510' });
         }
+        teachers = loadedTeachers;
         renderTeacherSelects();
+        
         if(document.getElementById('view-student').style.display !== 'none') renderStudentProblemBanner();
+
+        // 3. 서버에서 교사 정보가 확실히 로딩된 이후에 자동 로그인을 시도합니다.
+        const savedId = safeGetLocal(STORAGE_KEYS.CURRENT_TEACHER);
+        if (savedId) {
+          const found = teachers.find(t => t.id === savedId);
+          if (found) {
+            currentTeacher = found;
+            // 만약 새로고침 했을 때, 마지막 탭이 선생님 탭이었다면 즉시 대시보드를 띄워줍니다.
+            if (document.getElementById('view-teacher').style.display !== 'none') {
+              showTeacherDashboard();
+            }
+          }
+        }
       });
 
       const dbRefSubmissions = ref(db, 'submissions');
@@ -593,7 +618,6 @@
         if(document.getElementById('view-teacher').style.display !== 'none' && currentTeacher) loadTeacherProblemForm();
       });
 
-      // [핵심 추가] 관리자가 등록한 API 키를 파이어베이스에서 실시간으로 수신
       const dbRefConfig = ref(db, 'config/apiKey');
       onValue(dbRefConfig, (snapshot) => {
         globalApiKey = snapshot.val() || '';
@@ -875,7 +899,6 @@
     }
 
     async function getAiFeedbackForImage(dataUrl, studentInfo) {
-      // [핵심 변경] 파이어베이스에서 받아온 globalApiKey를 최우선으로 사용합니다.
       const apiKey = globalApiKey || safeGetLocal(STORAGE_KEYS.API_KEY);
       const modelName = 'gemini-3.8-flash';
 
@@ -1002,9 +1025,8 @@
       }
       finally { document.getElementById('btn-submit-work').disabled = false; }
     }
-
-    function checkExistingTeacherSession() { const savedId = safeGetSession(STORAGE_KEYS.CURRENT_TEACHER); if (savedId) { const found = teachers.find(t => t.id === savedId); if (found) { currentTeacher = found; showTeacherDashboard(); } } }
     
+    // [핵심 변경] 로그인 상태 유지를 위해 세션이 아닌 로컬 스토리지를 사용합니다.
     function handleTeacherLogin() { 
       const id = document.getElementById('login-id').value.trim(); 
       const pw = document.getElementById('login-pw').value.trim();
@@ -1016,7 +1038,8 @@
       if (found.password !== pw) return alert('비밀번호가 일치하지 않습니다.');
       
       currentTeacher = found; 
-      safeSetSession(STORAGE_KEYS.CURRENT_TEACHER, id); 
+      // 로컬 스토리지에 영구 저장
+      safeSetLocal(STORAGE_KEYS.CURRENT_TEACHER, id); 
       document.getElementById('login-pw').value = '';
       showTeacherDashboard(); 
     }
@@ -1030,7 +1053,8 @@
     }
     
     function handleTeacherLogout() { 
-      currentTeacher = null; try{ sessionStorage.removeItem(STORAGE_KEYS.CURRENT_TEACHER); }catch(e){} 
+      currentTeacher = null; 
+      try{ localStorage.removeItem(STORAGE_KEYS.CURRENT_TEACHER); }catch(e){} 
       setDisplay('teacher-dashboard', 'none'); setDisplay('teacher-login-box', 'block');
       document.getElementById('login-pw').value = '';
     }
@@ -1283,7 +1307,6 @@
       } catch(e) { alert("QR코드 생성 중 오류가 발생했습니다."); }
     }
     
-    // [핵심 추가] API 키 저장 시 Firebase 연동 로직 추가
     function saveApiConfig() {
       const keyInput = document.getElementById('api-key-input').value.trim();
       safeSetLocal(STORAGE_KEYS.API_KEY, keyInput);
